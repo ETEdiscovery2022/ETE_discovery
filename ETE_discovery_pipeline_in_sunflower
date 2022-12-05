@@ -1,0 +1,54 @@
+#Prediction of ETEs:
+
+#The Pfam protein domain prediction tool (v33.1) was used to choose 19 prototypical sequence elements: 14 (one for each LTR-RE lineage) presenting a GAG-POL region complete of all the protein domains, and 5 (one for each TIR superfamily) with an intact TPase domain.
+#The prototypical sequences (TEps) were then split into segments of 100 amino acids in length
+splitter TEps.fasta TEps_splitted.fasta -size=100
+seqret –ossingle TEps_splitted.fasta
+#then used to perform a tblastn search with the BLAST tool v2.6.0+ on the pool of elements of the same lineage/superfamily:
+makeblastdb -in pool_of_elements_same_lineage.fasta -dbtype nucl
+tblastn -query TEps_tract_X.fasta -db pool_of_elements_same_lineage.fasta -evalue 1e-5 -outfmt "6 std sseq" -out TEps_tract_X.tbn
+#Extract subject sequences from Blast result:
+cut -f 2,13 TEps_tract_X.tbn > TEps_tract_X_sbj.tbn
+#Convert .tbn in .fasta:
+awk '{print ">"$1"\n"$2}' TEps_tract_X_sbj.tbn > TEps_tract_X_sbj.fasta
+#The significant matches were retrieved and aligned using MUSCLE v3.8.31:
+muscle -in TEps_tract_X_sbj.fasta -out TEps_tract_X_sbj_aln.fasta
+#The multiple sequence alignments were then processed using the tool hmmbuild, which is part of HMMER v3.3 software , generating a Hidden Markov Model (HMM) profile for each multi-alignment:
+hmmbuild --informat afa TEps_tract_X_sbj_aln.fasta
+hmmpress tract_X.hmm
+#The HMM profiles were used to search all the gene products of sunflower using hmmscan (HMMER), thus identifying the sunflower genes showing correspondence with the HMM profiles:
+hmmscan --cpu 16 --max -E 1e-3 --notextw --tblout table_1 tract_X.hmm all_sunflower_gene_products.fasta > hmmoutput1
+#Of these, only the nuclear genes which showed similarity to a single order of elements (LTR-REs or TIR elements), were retained as putative ETEs.
+
+
+#Validation of ETEs:
+
+#Repetitiveness:
+#Genomic reads of sunflower (SRR5004633, https://www.ncbi.nlm.nih.gov/sra/SRR5004633) were mapped with CLC Genomics Workbench v9.5.3 (mismatch cost 1, insertion cost 1, deletion cost 1, length fraction 0.9, similarity fraction 0.9) onto the DNA sequences of the putative ETEs. As a comparison, our TE library was analysed to obtain the average coverage values used as an estimate of the repetitiveness. The thresholds were chosen as follows: as A and B correspond to the first and third quartiles of the average coverage distribution resulting from the mapping that occurred on TEs only, ETEs with average coverage < A were assigned a score of +1, those between A and B were assigned a value of 0, and those resulting > B were assigned a score of -1. For putative ETEs with higher average coverage we also evaluated the repetitiveness of the specific region, which showed similarity with an HMM profile (and therefore with a TE), also called a ‘matching region.’ The HMM matching regions of each ETE were then retrieved and searched through tblastn in the sunflower genome:
+makeblastdb -in sunflower_genome.fasta -dbtype nucl
+tblastn -query all_matching_regions_of_high_coverage_ETEs.fasta -db sunflower_genome.fasta -evalue 1e-5 -outfmt 6 -out tblastn_output.blastn10
+#Matching regions with significant alignments (identity percentage > 70.00, length > 70) were assigned a further penalty (-2).
+
+#Similarity with known TEs:
+#Three BLAST searches were performed:
+#i) blastn of putative ETEs against the TE library to identify which of the putative ETEs had similarities with known TEs over the majority of its length (putative ETEs not showing similarity with TEs (identity percentage < 70.00, length < 70) were assigned score +1):
+makeblastdb -in sunflower_TE_library.fasta -dbtype nucl
+blastn -query all_putative_ETEs.fasta -db sunflower_TE_library.fasta -evalue 1e-5 -outfmt 6 -out blastn_output1.blastn10
+#ii) blastn using as queries the exons of putative ETEs providing significant hits in i). Putative ETEs whose exons provided at least one significant match (identity percentage > 70.00, length > 70) were considered to possess similarity along the coding portions (score -1), otherwise (identity percentage < 70.00, length < 70) the similarity was limited to the intronic regions (score 0):
+blastn -query exons_of_putative_ETEs_output1.fasta -db sunflower TE_library.fasta -evalue 1e-5 -outfmt 6 -out blastn_output2.blastn10
+#iii) tblastn of the HMM matching regions of putative ETEs providing significant hits in ii) against the TE library. ETEs showing high similarity (identity percentage > 70.00, length > 70) with TEs within the exon portion corresponding to the matching region were assigned a score of -2:
+tblastn -query matching_regions_of_putative_ETEs_output2.fasta -db sunflower_TE_library.fasta -evalue 1e-5 -outfmt 6 -out blastn_output3.tblastn10
+
+#siRNA coverage:
+#482 siRNAs were mapped onto all sunflower ETEs using BWA v0.7.17-r1188 (aln/samse algorithm with the -n parameter set to 500). Putative ETEs not targeted by siRNAs were assigned a score of +1:
+bwa index all_putative_ETEs.fasta
+bwa aln all_putative_ETEs.fasta sunflower_siRNAs.fasta > file1.sai
+bwa samse -n 500 all_putative_ETEs.fasta file1.sai sunflower_siRNAs.fasta > file1.sam
+#For the others, it was determined whether mapping occurred in the intronic regions (score 0) or the exonic regions repeating the BWA mapping using only exon regions. We chose to penalise a putative ETE that mapped a siRNA in the exonic regions (score -2):
+bwa index exons_of_putative_ETEs.fasta
+bwa aln exons_of_putative_ETEs.fasta sunflower_siRNAs.fasta > file2.sai
+bwa samse -n 500 exons_of_putative_ETEs.fasta file2.sai sunflower_siRNAs.fasta > file2.sam
+
+#Expression:
+#Putative ETE expression was evaluated based on the average RPKM (reads per kilobase per million mapped reads) value calculated using three cDNA libraries of sunflower leaves (SRR4996792, SRR4996801, SRR4996807) that are publicly available at NCBI SRA (accession number SRP092742, available at https://trace.ncbi.nlm.nih.gov/Traces/sra/?study=SRP092742). The cDNA reads were mapped on a reference constituted by all sunflower genes and the TE library using the CLC Genomics workbench v. 9.5.3 with the following settings: mismatch cost 1, insertion cost 1, deletion cost 1, length fraction 0.9, similarity fraction 0.9). ETEs with RPKM > 1 were assigned a score of +1; ETEs with RPKM between 0 and 1 were assigned a score of 0; ETEs with RPKM = 0 were assigned a score of -1.
+#The TE domains that were more prone to be exapted were identified by reporting the percentage of the domains of Copia, Gypsy, and TIR elements involved in exaptation processes. ETEs derived by Copia LTR-REs, Gypsy LTR-REs, and TIR elements were investigated separately.
